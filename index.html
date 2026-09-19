@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Неон-Уклонист</title>
+    <!-- Мета-теги для превращения в приложение на iOS -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Неон-Игра">
+    <style>
+        * {
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: none;
+        }
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #0b0f19;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            overflow: hidden;
+            color: #ffffff;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        #ui {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background: rgba(11, 15, 25, 0.85);
+            transition: opacity 0.3s ease;
+        }
+        .hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+        h1 {
+            font-size: 2.5rem;
+            margin: 0 0 10px 0;
+            color: #00f0ff;
+            text-shadow: 0 0 15px rgba(0, 240, 255, 0.5);
+            text-align: center;
+        }
+        p {
+            font-size: 1.1rem;
+            color: #a0aec0;
+            margin: 0 0 30px 0;
+            text-align: center;
+            padding: 0 20px;
+        }
+        .btn {
+            background: linear-gradient(135deg, #00f0ff 0%, #7000ff 100%);
+            color: white;
+            border: none;
+            padding: 16px 40px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            border-radius: 30px;
+            box-shadow: 0 0 20px rgba(112, 0, 255, 0.4);
+            cursor: pointer;
+            transition: transform 0.1s ease;
+        }
+        .btn:active {
+            transform: scale(0.95);
+        }
+        #scoreBoard {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            font-size: 1.4rem;
+            font-weight: bold;
+            color: #00f0ff;
+            text-shadow: 0 0 10px rgba(0, 240, 255, 0.4);
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="scoreBoard">Счет: 0</div>
+    <canvas id="gameCanvas"></canvas>
+
+    <div id="ui">
+        <h1 id="uiTitle">НЕОН-УКЛОНИСТ</h1>
+        <p id="uiText">Удерживай палец и уворачивайся от красных сфер!</p>
+        <button class="btn" id="startBtn">ИГРАТЬ</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const ui = document.getElementById('ui');
+        const uiTitle = document.getElementById('uiTitle');
+        const uiText = document.getElementById('uiText');
+        const startBtn = document.getElementById('startBtn');
+        const scoreBoard = document.getElementById('scoreBoard');
+
+        let width, height;
+        function resize() {
+            width = canvas.width = window.innerWidth * window.devicePixelRatio;
+            height = canvas.height = window.innerHeight * window.devicePixelRatio;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        let gameState = 'START'; // START, PLAYING, GAMEOVER
+        let score = 0;
+        let bestScore = localStorage.getItem('neon_best_score') || 0;
+        let player = { x: 0, y: 0, radius: 25 * window.devicePixelRatio, targetX: 0, targetY: 0 };
+        let enemies = [];
+        let particles = [];
+        let frameCount = 0;
+
+        // Инициализация звука через Web Audio API
+        let audioCtx = null;
+        function playSound(type) {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+
+            const now = audioCtx.currentTime;
+            if (type === 'start') {
+                osc.frequency.setValueAtTime(300, now);
+                osc.frequency.exponentialRampToValueAtTime(600, now + 0.15);
+                gain.gain.setValueAtTime(0.2, now);
+                gain.gain.linearRampToValueAtTime(0.01, now + 0.15);
+                osc.start(now);
+                osc.stop(now + 0.15);
+            } else if (type === 'gameover') {
+                osc.frequency.setValueAtTime(300, now);
+                osc.frequency.exponentialRampToValueAtTime(80, now + 0.4);
+                gain.gain.setValueAtTime(0.3, now);
+                gain.gain.linearRampToValueAtTime(0.01, now + 0.4);
+                osc.start(now);
+                osc.stop(now + 0.4);
+            }
+        }
+
+        // Управление касаниями
+        let isTouching = false;
+        window.addEventListener('pointerdown', (e) => {
+            if (gameState === 'PLAYING') {
+                isTouching = true;
+                player.targetX = e.clientX * window.devicePixelRatio;
+                player.targetY = e.clientY * window.devicePixelRatio;
+            }
+        });
+        window.addEventListener('pointermove', (e) => {
+            if (gameState === 'PLAYING' && isTouching) {
+                player.targetX = e.clientX * window.devicePixelRatio;
+                player.targetY = e.clientY * window.devicePixelRatio;
+            }
+        });
+        window.addEventListener('pointerup', () => { isTouching = false; });
+
+        function startGame() {
+            playSound('start');
+            score = 0;
+            enemies = [];
+            particles = [];
+            player.x = width / 2;
+            player.y = height / 2;
+            player.targetX = width / 2;
+            player.targetY = height / 2;
+            gameState = 'PLAYING';
+            ui.classList.add('hidden');
+            scoreBoard.textContent = 'Счет: 0';
+        }
+
+        function gameOver() {
+            playSound('gameover');
+            gameState = 'GAMEOVER';
+            if (score > bestScore) {
+                bestScore = score;
+                localStorage.setItem('neon_best_score', bestScore);
+            }
+            uiTitle.textContent = 'ИГРА ОКОНЧЕНА';
+            uiText.innerHTML = `Ваш счет: ${Math.floor(score)}<br>Рекорд: ${Math.floor(bestScore)}`;
+            startBtn.textContent = 'ИГРАТЬ СНОВА';
+            ui.classList.remove('hidden');
+        }
+
+        startBtn.addEventListener('click', startGame);
+
+        // Главный игровой цикл
+        function update() {
+            if (gameState === 'PLAYING') {
+                score += 0.05;
+                scoreBoard.textContent = `Счет: ${Math.floor(score)}`;
+
+                // Плавное следование за пальцем
+                player.x += (player.targetX - player.x) * 0.2;
+                player.y += (player.targetY - player.y) * 0.2;
+
+                // Спавн врагов
+                frameCount++;
+                if (frameCount % Math.max(15, 40 - Math.floor(score / 5)) === 0) {
+                    let edge = Math.floor(Math.random() * 4);
+                    let ex, ey;
+                    if (edge === 0) { ex = Math.random() * width; ey = -50; }
+                    else if (edge === 1) { ex = Math.random() * width; ey = height + 50; }
+                    else if (edge === 2) { ex = -50; ey = Math.random() * height; }
+                    else { ex = width + 50; ey = Math.random() * height; }
+
+                    let angle = Math.atan2(player.y - ey, player.x - ex);
+                    let speed = (3 + Math.random() * 3) * (window.devicePixelRatio);
+                    enemies.push({
+                        x: ex, y: ey,
+                        vx: Math.cos(angle) * speed,
+                        vy: Math.sin(angle) * speed,
+                        radius: (12 + Math.random() * 10) * window.devicePixelRatio
+                    });
+                }
+
+                // Движение врагов и проверка столкновений
+                for (let i = enemies.length - 1; i >= 0; i--) {
+                    let en = enemies[i];
+                    en.x += en.vx;
+                    en.y += en.vy;
+
+                    // Удаление за экраном
+                    if (en.x < -100 || en.x > width + 100 || en.y < -100 || en.y > height + 100) {
+                        enemies.splice(i, 1);
+                        continue;
+                    }
+
+                    // Проверка столкновения с игроком
+                    let dx = player.x - en.x;
+                    let dy = player.y - en.y;
+                    let dist = Math.sqrt(dx * dx + dy * dy);
+                    if (dist < player.radius + en.radius) {
+                        gameOver();
+                    }
+                }
+            }
+        }
+
+        function draw() {
+            ctx.fillStyle = '#0b0f19';
+            ctx.fillRect(0, 0, width, height);
+
+            if (gameState === 'PLAYING' || gameState === 'GAMEOVER') {
+                // Отрисовка игрока (неоновый синий круг)
+                ctx.save();
+                ctx.shadowBlur = 20;
+                ctx.shadowColor = '#00f0ff';
+                ctx.fillStyle = '#00f0ff';
+                ctx.beginPath();
+                ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+
+                // Отрисовка врагов (неоновые красные сферы)
+                for (let en of enemies) {
+                    ctx.save();
+                    ctx.shadowBlur = 15;
+                    ctx.shadowColor = '#ff0055';
+                    ctx.fillStyle = '#ff0055';
+                    ctx.beginPath();
+                    ctx.arc(en.x, en.y, en.radius, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.restore();
+                }
+            }
+        }
+
+        function loop() {
+            update();
+            draw();
+            requestAnimationFrame(loop);
+        }
+        loop();
+    </script>
+</body>
+</html>
